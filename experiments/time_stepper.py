@@ -49,15 +49,16 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_dim", default=32, type=int)
     parser.add_argument("--n_layers", default=8, type=int)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--n_epochs", default=1000, type=int)
-    parser.add_argument("--n_traj_train", default=1000, type=int)
+    parser.add_argument("--n_epochs", default=10000, type=int)
+    parser.add_argument("--n_traj_train", default=100, type=int)
     parser.add_argument("--n_traj_validate", default=10, type=int)
     parser.add_argument("--t_start_train", default=0.0, type=float)
-    parser.add_argument("--t_end_train", type=float, default=0.002)
+    parser.add_argument("--t_end_train", type=float, default=0.001)
     parser.add_argument("--t_start_validate", default=0.0, type=float)
     parser.add_argument("--t_end_validate", type=float, default=4 * np.pi)
     parser.add_argument("--step_size_train", default=0.001, type=float)
     parser.add_argument("--step_size_validate", default=0.001, type=float)
+    parser.add_argument("--noise_std", default=0.0, type=float)
     args = parser.parse_args()
 
     # generate data
@@ -77,12 +78,13 @@ if __name__ == "__main__":
 
     x0_example = torch.tensor((0.6, 0)).double().unsqueeze(0).to(args.device)
     step_size_train = args.step_size_train
+    ε = 1e-10
     t_span_train = torch.arange(
-        args.t_start_train, args.t_end_train + step_size_train, step_size_train
+        args.t_start_train, args.t_end_train + ε, step_size_train
     )
     t_span_validate = torch.arange(
         args.t_start_validate,
-        args.t_end_validate + args.step_size_validate,
+        args.t_end_validate + ε,
         args.step_size_validate,
     )
 
@@ -94,6 +96,8 @@ if __name__ == "__main__":
         solver = args.solver
 
     _, x_train = odeint(f, x0_train, t_span_train, solver="rk4")
+    x_train = x_train + torch.rand_like(x_train) * args.noise_std
+
     _, x_validate = odeint(f, x0_validate, t_span_validate, solver="rk4")
     _, x_example = odeint(f, x0_example, t_span_validate, solver="rk4")
 
