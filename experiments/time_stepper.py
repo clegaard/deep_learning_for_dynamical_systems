@@ -22,22 +22,21 @@ class DirectSolver(SolverTemplate):
         self.stepping_class = "fixed"
 
     def step(self, f, x, t, dt, k1=None):
-        if k1 == None:
-            k1 = f(t, x)
-        x_sol = k1
+
+        x_sol = f(t, x)
         return None, x_sol, None
 
 
 class ResnetSolver(SolverTemplate):
-    def __init__(self, dtype=torch.float32):
+    def __init__(self, step_size=None, dtype=torch.float32):
         super().__init__(order=1)
         self.dtype = dtype
         self.stepping_class = "fixed"
 
+        self.step_size = 1 if step_size is None else step_size
+
     def step(self, f, x, t, dt, k1=None):
-        if k1 == None:
-            k1 = f(t, x)
-        x_sol = x + k1
+        x_sol = x + f(t, x) * self.step_size
         return None, x_sol, None
 
 
@@ -45,12 +44,12 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument(
-        "--solver", choices=["direct", "resnet", "euler"], default="direct"
+        "--solver", choices=["direct", "resnet", "euler", "rk4"], default="euler"
     )
     parser.add_argument("--hidden_dim", default=32, type=int)
-    parser.add_argument("--n_layers", default=3, type=int)
+    parser.add_argument("--n_layers", default=8, type=int)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--n_epochs", default=1, type=int)
+    parser.add_argument("--n_epochs", default=1000, type=int)
     parser.add_argument("--n_traj_train", default=1000, type=int)
     parser.add_argument("--n_traj_validate", default=10, type=int)
     parser.add_argument("--t_start_train", default=0.0, type=float)
@@ -60,13 +59,6 @@ if __name__ == "__main__":
     parser.add_argument("--step_size_train", default=0.001, type=float)
     parser.add_argument("--step_size_validate", default=0.001, type=float)
     args = parser.parse_args()
-
-    if args.solver.lower() == "direct":
-        solver = DirectSolver()
-    elif args.solver.lower() == "resnet":
-        solver = ResnetSolver()
-    else:
-        solver = args.solver
 
     # generate data
 
@@ -85,16 +77,27 @@ if __name__ == "__main__":
 
     x0_example = torch.tensor((0.6, 0)).double().unsqueeze(0).to(args.device)
     step_size_train = args.step_size_train
-    t_span_train = torch.arange(args.t_start_train, args.t_end_train, step_size_train)
-    t_span_validate = torch.arange(
-        args.t_start_validate, args.t_end_validate, args.step_size_validate
+    t_span_train = torch.arange(
+        args.t_start_train, args.t_end_train + step_size_train, step_size_train
     )
+    t_span_validate = torch.arange(
+        args.t_start_validate,
+        args.t_end_validate + args.step_size_validate,
+        args.step_size_validate,
+    )
+
+    if args.solver.lower() == "direct":
+        solver = DirectSolver()
+    elif args.solver.lower() == "resnet":
+        solver = ResnetSolver()
+    else:
+        solver = args.solver
 
     _, x_train = odeint(f, x0_train, t_span_train, solver="rk4")
     _, x_validate = odeint(f, x0_validate, t_span_validate, solver="rk4")
     _, x_example = odeint(f, x0_example, t_span_validate, solver="rk4")
 
-    # model
+    ##################### model ##########################
     layers = []
     layers.append(nn.Linear(2, args.hidden_dim))
     for _ in range(args.n_layers):
@@ -105,6 +108,10 @@ if __name__ == "__main__":
 
     net = nn.Sequential(*layers)
     net.to(args.device).double()
+
+    for m in net.modules():
+        if type(m) == nn.Linear:
+            nn.init.xavier_uniform_(m.weight)
 
     # optimizer
 
@@ -219,10 +226,12 @@ if __name__ == "__main__":
         x_pred_train[..., 1],
         label="predicted",
         color="blue",
-        linestyle="dashed",
+        # linestyle="dashed",
     )
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
 
     # phase space, validation
     fig, ax = plt.subplots()
@@ -233,12 +242,14 @@ if __name__ == "__main__":
         x_pred_validate[..., 1],
         label="predicted",
         color="blue",
-        linestyle="dashed",
+        # linestyle="dashed",
         # markevery=[0],
         # marker=">",
     )
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
 
     # time series validation, specific idx
     fig, (ax1, ax2) = plt.subplots(2, sharex=True)
