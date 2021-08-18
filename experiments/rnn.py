@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 from torch import nn
 from torch.nn.functional import mse_loss
-from torchdiffeq import odeint
+from torchdyn.numerics import odeint
 
 from dataloader import Sampling, load_pendulum_data
 
@@ -16,9 +16,11 @@ def run():
 
     """
     y0s_domain = [[-1., 1.], [-1., 1.]]
-    step_size = 0.01
+    n_steps = 1
+    step_size = 0.01  
+    t_span = torch.arange(0., step_size * (n_steps + 1), step_size)
 
-    y0s, y = load_pendulum_data(y0s_domain, n_trajectories=100, n_steps=2, step_size=step_size, sampling=Sampling.RANDOM)
+    y0s, ys = load_pendulum_data(t_span, y0s_domain, n_trajectories=20, sampling=Sampling.RANDOM)
 
     """
     Network
@@ -28,25 +30,12 @@ def run():
 
         def __init__(self, n_states):
             super().__init__()
-            hidden_dim = 32
-            self.rnn = nn.RNN(n_states, hidden_dim, batch_first=True)
-            self.out = nn.Linear(hidden_dim, n_states)
+            self.rnn = nn.RNN(n_states, n_states, batch_first=True).double()
 
         def forward(self, y0s):
-            out, hidden = self.rnn(y0s)
-            return self.out(out)
-
-        def simulate_direct(self, y0s, n_steps):
-            ys = [y0s]
-            for _ in range(n_steps):
-                ys.append(self(ys[-1]))
-            return torch.swapaxes(torch.stack(ys), 0, 1).squeeze(dim=2)
-
-        def simulate_euler(self, y0s, n_steps, step_size):
-            ys = [y0s]
-            for _ in range(n_steps):
-                ys.append(ys[-1] + step_size * self(ys[-1]))
-            return torch.swapaxes(torch.stack(ys), 0, 1)
+            y0s = y0s.unsqueeze(dim=1)
+            out, hidden = self.rnn(y0s, torch.swapaxes(y0s, 0, 1))
+            return hidden.squeeze(dim=0)
 
 
     model = RNN(n_states=2)
@@ -56,14 +45,14 @@ def run():
     Training
 
     """
-    epochs = 2000
+    epochs = 20
     progress = tqdm(range(epochs), 'Training')
     losses = []
 
     for _ in progress:
-        y_pred = model(y)
+        _, y_pred = odeint(lambda t, y: model(y), y0s, t_span, 'euler')
 
-        loss = mse_loss(y_pred, y)
+        loss = mse_loss(y_pred, ys)
         loss.backward()
         opt.step()
         opt.zero_grad()
@@ -75,16 +64,21 @@ def run():
     Test data
 
     """
-    y0s, y = load_pendulum_data(y0s_domain, n_trajectories=10, n_steps=20, step_size=step_size, sampling=Sampling.GRID)
-    y_pred = model.simulate_direct(y0s, n_steps=20)
+    y0s_domain = [[-1., 1.], [-1., 1.]]
+    n_steps = 20
+    step_size = 0.01  
+    t_span = torch.arange(0., step_size * (n_steps + 1), step_size)
+
+    y0s, ys = load_pendulum_data(t_span, y0s_domain, n_trajectories=10, sampling=Sampling.GRID)
+    _, y_pred = odeint(lambda t, y: model(y), y0s, t_span, 'euler')
 
     """
-    Plot results
+    Plot
 
     """
-    plt.plot(y_pred.detach().numpy()[:, :, 1].T, y_pred.detach().numpy()[:, :, 0].T, color='r')
-    plt.plot(y.numpy()[:, :, 1].T, y.numpy()[:, :, 0].T, color='b')
-    plt.scatter(y[:, 1, 1], y[:, 1, 0], color='g')
+    plt.plot(y_pred.detach().numpy()[:, :, 1], y_pred.detach().numpy()[:, :, 0], color='r')
+    plt.plot(ys.numpy()[:, :, 1], ys.numpy()[:, :, 0], color='b')
+    plt.scatter(ys[0, :, 1], ys[0, :, 0], color='g')
     plt.ylim(y0s_domain[0])
     plt.xlim(y0s_domain[1])
     plt.show()

@@ -4,8 +4,7 @@ import torch
 
 from enum import Enum
 from smt.sampling_methods import LHS
-from torchdiffeq import odeint
-
+from torchdyn.numerics import odeint
 
 class Sampling(Enum):
     RANDOM = 0
@@ -25,22 +24,17 @@ def random_init_samples(domain, n_trajectories: int) -> np.ndarray:
     return values(n_trajectories)
 
 
-def simulate_ode(f, y0s: torch.Tensor, n_steps: int, step_size: float) -> torch.Tensor:
-    time_points = torch.arange(0., step_size * (n_steps + 1), step_size)
-    ys = [(odeint(f, y0, time_points)) for y0 in y0s]
-    return torch.stack(ys)
-
-
 def pendulum(t, y):
-    theta = y[0]
-    omega = y[1]
-    d_theta = omega
-    d_omega = - torch.sin(theta)
-    return torch.tensor([d_theta, d_omega]).float()
+    θ = y[:, 0]
+    ω = y[:, 1]
+
+    dθ = ω
+    dω = -torch.sin(θ)
+
+    return torch.stack((dθ, dω), dim=1)
 
 
-def load_pendulum_data(y0s_domain=None, n_trajectories=100, n_steps=2, 
-step_size=0.001, sampling=Sampling.RANDOM) -> Tuple[torch.Tensor, torch.Tensor]:
+def load_pendulum_data(t_span, y0s_domain=None, n_trajectories=100, sampling=Sampling.RANDOM, solver='rk4') -> Tuple[torch.Tensor, torch.Tensor]:
     if not y0s_domain:
         y0s_domain = [[-1., 1.], [-1., 1.]]
 
@@ -49,6 +43,7 @@ step_size=0.001, sampling=Sampling.RANDOM) -> Tuple[torch.Tensor, torch.Tensor]:
     elif sampling == Sampling.GRID:
         y0s = grid_init_samples(y0s_domain, n_trajectories)
 
-    y0s = torch.tensor(y0s).float()
-    y = simulate_ode(pendulum, y0s, n_steps, step_size)
-    return y[:, 0, :].unsqueeze(dim=1), y
+    y0s = torch.tensor(y0s)
+    _, ys = odeint(pendulum, y0s, t_span, solver) 
+
+    return y0s, ys
