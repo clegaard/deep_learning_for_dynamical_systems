@@ -1,3 +1,4 @@
+from typing import Tuple
 import numpy as np
 import torch
 
@@ -5,9 +6,11 @@ from enum import Enum
 from smt.sampling_methods import LHS
 from torchdiffeq import odeint
 
+
 class Sampling(Enum):
     RANDOM = 0
     GRID = 1
+
 
 def grid_init_samples(domain, n_trajectories: int) -> np.ndarray:
     x = np.linspace(domain[0][0], domain[0][1], n_trajectories)
@@ -35,7 +38,9 @@ def pendulum(t, y):
     d_omega = - torch.sin(theta)
     return torch.tensor([d_theta, d_omega]).float()
 
-def load_pendulum_data(y0s_domain=None, n_trajectories=100, n_steps=2, step_size= 0.001, sampling=Sampling.RANDOM):
+
+def load_pendulum_data(y0s_domain=None, n_trajectories=100, n_steps=2, 
+step_size=0.001, sampling=Sampling.RANDOM) -> Tuple[torch.Tensor, torch.Tensor]:
     if not y0s_domain:
         y0s_domain = [[-1., 1.], [-1., 1.]]
 
