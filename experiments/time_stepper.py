@@ -11,6 +11,8 @@ import numpy as np
 import torch
 from torchdyn.numerics import odeint
 from torchdyn.numerics.solvers import SolverTemplate
+import matplotlib.patches as mpatches
+from matplotlib.collections import LineCollection
 
 from visualization import get_meshgrid
 
@@ -49,11 +51,11 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_dim", default=32, type=int)
     parser.add_argument("--n_layers", default=8, type=int)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--n_epochs", default=10000, type=int)
+    parser.add_argument("--n_epochs", default=2000, type=int)
     parser.add_argument("--n_traj_train", default=100, type=int)
     parser.add_argument("--n_traj_validate", default=10, type=int)
     parser.add_argument("--t_start_train", default=0.0, type=float)
-    parser.add_argument("--t_end_train", type=float, default=0.001)
+    parser.add_argument("--t_end_train", type=float, default=0.002)
     parser.add_argument("--t_start_validate", default=0.0, type=float)
     parser.add_argument("--t_end_validate", type=float, default=4 * np.pi)
     parser.add_argument("--step_size_train", default=0.001, type=float)
@@ -172,6 +174,9 @@ if __name__ == "__main__":
     density = 1
     fig, ax = plt.subplots()
     fig.canvas.manager.set_window_title("stream plot")
+    ode_patch = mpatches.Patch(color="black", label="true")
+    nn_patch = mpatches.Patch(color="blue", label="pred")
+
     ax.streamplot(
         x0_grid[..., 0],
         x0_grid[..., 1],
@@ -192,6 +197,8 @@ if __name__ == "__main__":
 
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
+
+    ax.legend(handles=[ode_patch, nn_patch])
 
     # quiver
     fig, ax = plt.subplots()
@@ -204,6 +211,7 @@ if __name__ == "__main__":
         color="black",
         angles="xy",
         scale_units="xy",
+        label="true"
         # scale=1,
     )
 
@@ -216,7 +224,9 @@ if __name__ == "__main__":
         angles="xy",
         scale_units="xy",
         # scale=1,
+        label="pred",
     )
+    ax.legend()
 
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
@@ -224,36 +234,40 @@ if __name__ == "__main__":
     # phase space, training
     fig, ax = plt.subplots()
     fig.canvas.manager.set_window_title("phase space: training")
-    ax.plot(x_train[..., 0], x_train[..., 1], label="true", color="black")
-    ax.plot(
-        x_pred_train[..., 0],
-        x_pred_train[..., 1],
-        label="predicted",
-        color="blue",
-        # linestyle="dashed",
+
+    lines_true = LineCollection(
+        [x for x in x_train.swapaxes(0, 1)], color="black", label="true"
     )
+    lines_pred = LineCollection(
+        [x for x in x_pred_train.swapaxes(0, 1)], color="blue", label="pred"
+    )
+
+    ax.add_collection(lines_true)
+    ax.add_collection(lines_pred)
+
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
     ax.set_xlim(-2, 2)
     ax.set_ylim(-2, 2)
+    ax.legend()
 
     # phase space, validation
     fig, ax = plt.subplots()
     fig.canvas.manager.set_window_title("phase space: validation")
-    ax.plot(x_validate[..., 0], x_validate[..., 1], label="true", color="black")
-    ax.plot(
-        x_pred_validate[..., 0],
-        x_pred_validate[..., 1],
-        label="predicted",
-        color="blue",
-        # linestyle="dashed",
-        # markevery=[0],
-        # marker=">",
+    lines_true = LineCollection(
+        [x for x in x_validate.swapaxes(0, 1)], color="black", label="true"
     )
+    lines_pred = LineCollection(
+        [x for x in x_pred_validate.swapaxes(0, 1)], color="blue", label="pred"
+    )
+
+    ax.add_collection(lines_true)
+    ax.add_collection(lines_pred)
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
     ax.set_xlim(-2, 2)
     ax.set_ylim(-2, 2)
+    ax.legend()
 
     # time series validation, specific idx
     fig, (ax1, ax2) = plt.subplots(2, sharex=True)
@@ -267,16 +281,20 @@ if __name__ == "__main__":
         linestyle="dashed",
         color="blue",
     )
-    ax2.plot(t_span_validate, x_validate[..., example_idx, 1], color="black")
+    ax2.plot(
+        t_span_validate, x_validate[..., example_idx, 1], color="black", label="true"
+    )
     ax2.plot(
         t_span_validate,
         x_pred_validate[..., example_idx, 1],
         linestyle="dashed",
-        color="red",
+        color="blue",
+        label="pred",
     )
     ax1.set_ylabel("θ(t)")
     ax2.set_ylabel("ω(t)")
     ax2.set_xlabel("t")
+    ax2.legend()
 
     # time series validation, example (0.6,0)
     fig, (ax1, ax2) = plt.subplots(2, sharex=True)
@@ -294,7 +312,7 @@ if __name__ == "__main__":
         t_span_validate,
         x_pred_example[..., 1],
         linestyle="dashed",
-        color="red",
+        color="blue",
         label="predicted",
     )
     ax1.set_ylabel("θ(t)")
@@ -307,6 +325,5 @@ if __name__ == "__main__":
     ax.plot(losses)
     ax.set_xlabel("epoch")
     ax.set_ylabel("MSE")
-    ax.legend()
 
     plt.show()
