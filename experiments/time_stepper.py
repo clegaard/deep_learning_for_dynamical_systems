@@ -14,7 +14,7 @@ from torchdyn.numerics.solvers import SolverTemplate
 import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 
-from visualization import get_meshgrid
+from visualization import get_meshgrid, plot_colored
 
 
 class DirectSolver(SolverTemplate):
@@ -55,12 +55,14 @@ if __name__ == "__main__":
     parser.add_argument("--n_traj_train", default=100, type=int)
     parser.add_argument("--n_traj_validate", default=10, type=int)
     parser.add_argument("--t_start_train", default=0.0, type=float)
-    parser.add_argument("--t_end_train", type=float, default=0.002)
+    parser.add_argument("--t_end_train", type=float, default=0.001)
     parser.add_argument("--t_start_validate", default=0.0, type=float)
     parser.add_argument("--t_end_validate", type=float, default=4 * np.pi)
     parser.add_argument("--step_size_train", default=0.001, type=float)
     parser.add_argument("--step_size_validate", default=0.001, type=float)
     parser.add_argument("--noise_std", default=0.0, type=float)
+    parser.add_argument("--domain_train", default=1.0, type=float)
+    parser.add_argument("--domain_validate", default=1.0, type=float)
     args = parser.parse_args()
 
     # generate data
@@ -74,11 +76,19 @@ if __name__ == "__main__":
 
         return torch.stack((dθ, dω), dim=-1)
 
-    x0_train = torch.tensor(lhs(2, args.n_traj_train), device=args.device) * 2 - 1
+    domain_draw_factor = 1.3
 
-    x0_validate = torch.tensor(lhs(2, args.n_traj_validate), device=args.device) * 2 - 1
-
+    domain_train = args.domain_train
+    domain_validate = args.domain_validate
+    x0_train = (
+        torch.tensor(lhs(2, args.n_traj_train), device=args.device) * 2 - 1
+    ) * domain_train
+    x0_validate = (
+        torch.tensor(lhs(2, args.n_traj_validate), device=args.device) * 2 - 1
+    ) * domain_validate
+    x0_grid = get_meshgrid(step_per_axis=0.01, domain=domain_validate)
     x0_example = torch.tensor((0.6, 0)).double().unsqueeze(0).to(args.device)
+
     step_size_train = args.step_size_train
     ε = 1e-10
     t_span_train = torch.arange(
@@ -126,7 +136,6 @@ if __name__ == "__main__":
     # train
     losses = []
 
-    x_pred_train = None
     for _ in tqdm(range(args.n_epochs)):
 
         _, x_pred_train = odeint(
@@ -138,6 +147,8 @@ if __name__ == "__main__":
         opt.zero_grad()
         losses.append(loss.item())
 
+    _, x_pred_train = odeint(lambda t, x: net(x), x0_train, t_span_train, solver=solver)
+
     _, x_pred_validate = odeint(
         lambda t, x: net(x), x0_validate, t_span_validate, solver=solver
     )
@@ -147,7 +158,7 @@ if __name__ == "__main__":
     )
 
     # derivatives
-    x0_grid = get_meshgrid(0.01).double()
+    # x0_grid_before = get_meshgrid(step_per_axis=0.01, domain=domain)
     x_derivative = f(None, x0_grid)
 
     if args.solver == "direct":
@@ -197,6 +208,8 @@ if __name__ == "__main__":
 
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
+    ax.set_xlim(-domain_validate, domain_validate)
+    ax.set_ylim(-domain_validate, domain_validate)
 
     ax.legend(handles=[ode_patch, nn_patch])
 
@@ -230,6 +243,8 @@ if __name__ == "__main__":
 
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
+    ax.set_ylim(-domain_validate, domain_validate)
+    ax.set_xlim(-domain_validate, domain_validate)
 
     # phase space, training
     fig, ax = plt.subplots()
@@ -247,8 +262,8 @@ if __name__ == "__main__":
 
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
+    ax.set_xlim(-domain_draw_factor * domain_train, domain_draw_factor * domain_train)
+    ax.set_ylim(-domain_draw_factor * domain_train, domain_draw_factor * domain_train)
     ax.legend()
 
     # phase space, validation
@@ -257,16 +272,26 @@ if __name__ == "__main__":
     lines_true = LineCollection(
         [x for x in x_validate.swapaxes(0, 1)], color="black", label="true"
     )
-    lines_pred = LineCollection(
-        [x for x in x_pred_validate.swapaxes(0, 1)], color="blue", label="pred"
-    )
-
+    # lines_pred = LineCollection(
+    #     [x for x in x_pred_validate.swapaxes(0, 1)], color="blue", label="pred"
+    # )
+    # plot_colored(fig, ax, t_span_validate, x_validate, label="true")
     ax.add_collection(lines_true)
-    ax.add_collection(lines_pred)
+
+    plot_colored(
+        fig,
+        ax,
+        t_span_validate,
+        x_pred_validate,
+        label="pred",
+        colorbar=True,
+        # linestyle="dashed",
+    )
+    # ax.add_collection(lines_pred)
     ax.set_xlabel("θ")
     ax.set_ylabel("ω")
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
+    ax.set_xlim(-2 * domain_validate, 2 * domain_validate)
+    ax.set_ylim(-2 * domain_validate, 2 * domain_validate)
     ax.legend()
 
     # time series validation, specific idx
