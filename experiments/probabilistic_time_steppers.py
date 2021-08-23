@@ -53,19 +53,20 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_dim", default=32, type=int)
     parser.add_argument("--n_layers", default=8, type=int)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--n_epochs", default=2000, type=int)
+    parser.add_argument("--n_epochs", default=0, type=int)
     parser.add_argument("--n_traj_train", default=100, type=int)
     parser.add_argument("--n_traj_validate", default=10, type=int)
     parser.add_argument("--t_start_train", default=0.0, type=float)
-    parser.add_argument("--t_end_train", type=float, default=0.01)
+    parser.add_argument("--t_end_train", default=1.0, type=float)
     parser.add_argument("--t_start_validate", default=0.0, type=float)
-    parser.add_argument("--t_end_validate", type=float, default=4 * np.pi)
-    parser.add_argument("--step_size_train", default=0.001, type=float)
-    parser.add_argument("--step_size_validate", default=0.001, type=float)
+    parser.add_argument("--t_end_validate", default=4 * np.pi, type=float)
+    parser.add_argument("--step_size_train", default=0.01, type=float)
+    parser.add_argument("--step_size_validate", default=0.01, type=float)
     parser.add_argument("--noise_std", default=0.000001, type=float)
     parser.add_argument("--domain_train", default=1.0, type=float)
     parser.add_argument("--domain_validate", default=1.0, type=float)
     parser.add_argument("--latent_dim", default=4, type=int)
+    parser.add_argument("--scatter", default=False, type=bool)
     args = parser.parse_args()
 
     # generate data
@@ -117,7 +118,7 @@ if __name__ == "__main__":
     _, x_train = odeint(f, x0_train, t_span_train, solver="rk4")
     x_train = x_train + torch.rand_like(x_train) * args.noise_std
 
-    _, x_validate = odeint(f, x0_validate, t_span_validate, solver="rk4")
+    _, x_validate = odeint(f, x0_validate, t_span_train, solver="rk4")
     _, x_example = odeint(f, x0_example, t_span_validate, solver="rk4")
 
     ##################### model ##########################
@@ -130,89 +131,103 @@ if __name__ == "__main__":
             self.fc = nn.Linear(hidden_size, hidden_size * 2)
 
         def forward(self, x):
-            _, h = self.rnn(x)
+            x_flipped = torch.flip(x, (0,))
+            _, h = self.rnn(x_flipped)
             z0 = self.fc(h)
             return z0
 
-    encoder = Encoder(2, 4).to(device).double()
+    class LatentODE(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
 
-    layers = []
-    layers.append(nn.Linear(4, args.hidden_dim))
-    for _ in range(args.n_layers):
-        layers.append(nn.Linear(args.hidden_dim, args.hidden_dim))
-        layers.append(nn.Softplus())
+            self.encoder = Encoder(2, 4)
 
-    layers.append(nn.Linear(args.hidden_dim, 4))
-    dynamics = nn.Sequential(*layers)
-    dynamics.to(args.device).double()
+            layers = []
+            layers.append(nn.Linear(4, args.hidden_dim))
+            for _ in range(args.n_layers):
+                layers.append(nn.Linear(args.hidden_dim, args.hidden_dim))
+                layers.append(nn.Softplus())
 
-    decoder = (
-        nn.Sequential(nn.Linear(latent_dim, 20), nn.ReLU(), nn.Linear(20, 2))
-        .to(device)
-        .double()
-    )
+            layers.append(nn.Linear(args.hidden_dim, 4))
+            self.dynamics = nn.Sequential(*layers)
 
-    for m in chain(encoder.modules(), dynamics.modules(), decoder.modules()):
+            self.decoder = (
+                nn.Sequential(nn.Linear(latent_dim, 20), nn.ReLU(), nn.Linear(20, 2))
+                .to(device)
+                .double()
+            )
+
+        def forward(self, t, x):
+            z = self.encoder(x)[-1]
+            qz0_mean, qz0_logvar = z[:, :latent_dim], z[:, latent_dim:]
+            qz0_std = torch.exp(0.5 * qz0_logvar)
+            ε = torch.randn_like(qz0_mean)
+            z0 = qz0_mean + ε * qz0_std  # TODO
+            # z0 = qz0_mean  # TODO
+
+            _, z_pred = odeint(lambda t, z: self.dynamics(z), z0, t, solver=solver)
+
+            x_pred = self.decoder(z_pred)
+
+            return qz0_mean, qz0_logvar, x_pred
+
+    net = LatentODE().to(args.device).double()
+
+    for m in chain(net.modules()):
         if type(m) == nn.Linear:
             nn.init.xavier_uniform_(m.weight)
 
     # optimizer
 
-    opt = Adam(chain(dynamics.parameters(), encoder.parameters(), decoder.parameters()))
+    opt = Adam(net.parameters())
 
     # train
     losses = []
 
     def log_normal_pdf(x, mean, logvar):
-
-        return 0.5 * (
+        px = -0.5 * (
             torch.log(torch.tensor(np.pi))
             + logvar
             + (x - mean) ** 2.0 / torch.exp(logvar)
         )
+        torch.tensor
+        return px.sum((0, 2))
 
     def normal_kl(μ1, log_var1, μ2, log_var2):
-        v1 = torch.exp(torch.tensor(log_var1))
-        v2 = torch.exp(torch.tensor(log_var2))
+        v1 = torch.exp(log_var1)
+        v2 = torch.exp(log_var2)
         lstd1 = log_var1 / 2.0
         lstd2 = log_var2 / 2.0
 
         kl = lstd2 - lstd1 + ((v1 + (μ1 - μ2) ** 2.0) / (2.0 * v2)) - 0.5
-        return kl
+        return kl.sum(-1)
 
     for _ in tqdm(range(args.n_epochs)):
 
-        z = encoder(x_train)[-1]
-        qz0_mean, qz0_logvar = z[:, :latent_dim], z[:, latent_dim:]
-        qz0_std = torch.exp(0.5 * qz0_logvar)
-        ε = torch.randn_like(qz0_mean)
-        z0 = qz0_mean + ε * qz0_std
-
-        _, z_pred_train = odeint(
-            lambda t, x: dynamics(x), z0, t_span_train, solver=solver
-        )
-
-        x_pred_train = decoder(z_pred_train)
+        # x_pred_train = decoder(z_pred_train)
+        qz0_mean, qz0_logvar, x_pred_train = net(t_span_train, x_train)
 
         log_px = log_normal_pdf(x_pred_train, x_train, noise_log_var)
-        log_normal_kl = normal_kl(qz0_mean, qz0_logvar, 0, 0)
-        loss = torch.mean(-log_normal_kl + log_px, dim=0)
+        log_normal_kl = normal_kl(
+            qz0_mean,
+            qz0_logvar,
+            torch.zeros_like(qz0_mean),
+            torch.zeros_like(qz0_logvar),
+        )
+
+        loss = torch.mean(log_normal_kl - log_px, dim=0)
+        # loss = mse_loss(x_pred_train, x_train)
         loss.backward()
         opt.step()
         opt.zero_grad()
         losses.append(loss.item())
 
-    _, x_pred_train = odeint(
-        lambda t, x: dynamics(x), x0_train, t_span_train, solver=solver
-    )
+    _, _, x_pred_train = net(t_span_train, x_train)
+    _, _, x_pred_validate = net(t_span_validate, x_validate)
 
-    _, x_pred_validate = odeint(
-        lambda t, x: dynamics(x), x0_validate, t_span_validate, solver=solver
-    )
-
-    _, x_pred_example = odeint(
-        lambda t, x: dynamics(x), x0_example, t_span_validate, solver=solver
-    )
+    # _, x_pred_example = odeint(
+    #     lambda t, x: dynamics(x), x0_example, t_span_validate, solver=solver
+    # )
 
     # derivatives
     # x0_grid_before = get_meshgrid(step_per_axis=0.01, domain=domain)
@@ -230,9 +245,9 @@ if __name__ == "__main__":
     # else:
     #     x_derivative_pred = dynamics(x0_grid)
 
-    # # plot
-    # x_pred_train = x_pred_train.detach().numpy()
-    # x_pred_validate = x_pred_validate.detach().numpy()
+    # plot
+    x_pred_train = x_pred_train.detach().numpy()
+    x_pred_validate = x_pred_validate.detach().numpy()
     # x_pred_example = x_pred_example.detach().numpy()
     # x_derivative_pred = x_derivative_pred.detach().numpy()
     # x_derivative = x_derivative.detach().numpy()
@@ -303,80 +318,79 @@ if __name__ == "__main__":
     # ax.set_ylim(-domain_validate, domain_validate)
     # ax.set_xlim(-domain_validate, domain_validate)
 
-    # # phase space, training
-    # fig, ax = plt.subplots()
-    # fig.canvas.manager.set_window_title("phase space: training")
+    # phase space, training
+    fig, ax = plt.subplots()
+    fig.canvas.manager.set_window_title("phase space: training")
 
-    # lines_true = LineCollection(
-    #     [x for x in x_train.swapaxes(0, 1)], color="black", label="true"
-    # )
+    lines_true = LineCollection(
+        [x for x in x_train.swapaxes(0, 1)],
+        color="black",
+        label="true",
+    )
     # lines_pred = LineCollection(
     #     [x for x in x_pred_train.swapaxes(0, 1)], color="blue", label="pred"
     # )
 
-    # ax.add_collection(lines_true)
+    if args.scatter:
+        ax.scatter(x_pred_train[..., 0], x_pred_train[..., 1])
+    plot_colored(
+        fig,
+        ax,
+        t_span_train,
+        x_pred_train,
+        label="pred",
+        colorbar=True,
+        # linestyle="dashed",
+    )
+    if args.scatter:
+        ax.scatter(x_train[..., 0], x_train[..., 1])
+    ax.add_collection(lines_true)
     # ax.add_collection(lines_pred)
 
-    # ax.set_xlabel("θ")
-    # ax.set_ylabel("ω")
-    # ax.set_xlim(-domain_draw_factor * domain_train, domain_draw_factor * domain_train)
-    # ax.set_ylim(-domain_draw_factor * domain_train, domain_draw_factor * domain_train)
-    # ax.legend()
+    ax.set_xlabel("θ")
+    ax.set_ylabel("ω")
+    ax.set_xlim(-domain_draw_factor * domain_train, domain_draw_factor * domain_train)
+    ax.set_ylim(-domain_draw_factor * domain_train, domain_draw_factor * domain_train)
+    ax.legend()
 
     # # phase space, validation
-    # fig, ax = plt.subplots()
-    # fig.canvas.manager.set_window_title("phase space: validation")
-    # lines_true = LineCollection(
-    #     [x for x in x_validate.swapaxes(0, 1)], color="black", label="true"
-    # )
-    # # lines_pred = LineCollection(
-    # #     [x for x in x_pred_validate.swapaxes(0, 1)], color="blue", label="pred"
-    # # )
-    # # plot_colored(fig, ax, t_span_validate, x_validate, label="true")
-    # ax.add_collection(lines_true)
+    fig, ax = plt.subplots()
+    fig.canvas.manager.set_window_title("phase space: validation")
 
-    # plot_colored(
-    #     fig,
-    #     ax,
-    #     t_span_validate,
-    #     x_pred_validate,
-    #     label="pred",
-    #     colorbar=True,
-    #     # linestyle="dashed",
+    lines_true = LineCollection(
+        [x for x in x_validate.swapaxes(0, 1)],
+        color="black",
+        label="true",
+    )
+    # lines_pred = LineCollection(
+    #     [x for x in x_pred_train.swapaxes(0, 1)], color="blue", label="pred"
     # )
-    # # ax.add_collection(lines_pred)
-    # ax.set_xlabel("θ")
-    # ax.set_ylabel("ω")
-    # ax.set_xlim(-2 * domain_validate, 2 * domain_validate)
-    # ax.set_ylim(-2 * domain_validate, 2 * domain_validate)
-    # ax.legend()
+    if args.scatter:
+        ax.scatter(x_pred_validate[..., 0], x_pred_validate[..., 1])
+    plot_colored(
+        fig,
+        ax,
+        t_span_validate,
+        x_pred_validate,
+        label="pred",
+        colorbar=True,
+        # linestyle="dashed",
+    )
 
-    # # time series validation, specific idx
-    # fig, (ax1, ax2) = plt.subplots(2, sharex=True)
-    # example_idx = 0
-    # fig.canvas.manager.set_window_title(f"states vs time: validation idx={example_idx}")
+    if args.scatter:
+        ax.scatter(x_validate[..., 0], x_validate[..., 1])
+    ax.add_collection(lines_true)
+    # ax.add_collection(lines_pred)
 
-    # ax1.plot(t_span_validate, x_validate[..., example_idx, 0], color="black")
-    # ax1.plot(
-    #     t_span_validate,
-    #     x_pred_validate[..., example_idx, 0],
-    #     linestyle="dashed",
-    #     color="blue",
-    # )
-    # ax2.plot(
-    #     t_span_validate, x_validate[..., example_idx, 1], color="black", label="true"
-    # )
-    # ax2.plot(
-    #     t_span_validate,
-    #     x_pred_validate[..., example_idx, 1],
-    #     linestyle="dashed",
-    #     color="blue",
-    #     label="pred",
-    # )
-    # ax1.set_ylabel("θ(t)")
-    # ax2.set_ylabel("ω(t)")
-    # ax2.set_xlabel("t")
-    # ax2.legend()
+    ax.set_xlabel("θ")
+    ax.set_ylabel("ω")
+    ax.set_xlim(
+        -domain_draw_factor * domain_validate, domain_draw_factor * domain_validate
+    )
+    ax.set_ylim(
+        -domain_draw_factor * domain_validate, domain_draw_factor * domain_validate
+    )
+    ax.legend()
 
     # # time series validation, example (0.6,0)
     # fig, (ax1, ax2) = plt.subplots(2, sharex=True)
@@ -402,10 +416,10 @@ if __name__ == "__main__":
     # ax2.set_xlabel("t")
     # ax2.legend()
 
-    # # show
-    # fig, ax = plt.subplots()
-    # ax.plot(losses)
-    # ax.set_xlabel("epoch")
-    # ax.set_ylabel("MSE")
+    # show
+    fig, ax = plt.subplots()
+    ax.plot(losses)
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("MSE")
 
-    # plt.show()
+    plt.show()
