@@ -108,7 +108,8 @@ if __name__ == "__main__":
         solver = args.solver
 
     _, x_train = odeint(f, x0_train, t_span_train, solver="rk4")
-    x_train = x_train + torch.rand_like(x_train) * args.noise_std
+    x_true = x_train
+    x_train = x_train + torch.randn_like(x_train) * args.noise_std
 
     _, x_validate = odeint(f, x0_validate, t_span_validate, solver="rk4")
     _, x_example = odeint(f, x0_example, t_span_validate, solver="rk4")
@@ -251,13 +252,21 @@ if __name__ == "__main__":
     fig.canvas.manager.set_window_title("phase space: training")
 
     lines_true = LineCollection(
-        [x for x in x_train.swapaxes(0, 1)], color="black", label="true"
+        [x for x in x_true.swapaxes(0, 1)], color="black", label="true"
     )
+
+    # lines_noise = LineCollection(
+    #     [x for x in x_train.swapaxes(0, 1)], color="red", label="noisy"
+    # )
+
     lines_pred = LineCollection(
         [x for x in x_pred_train.swapaxes(0, 1)], color="blue", label="pred"
     )
 
     ax.add_collection(lines_true)
+    if args.noise_std != 0.0:
+        ax.scatter(x_train[..., 0], x_train[..., 1], label="observations")
+        # ax.add_collection(lines_noise)
     ax.add_collection(lines_pred)
 
     ax.set_xlabel("θ")

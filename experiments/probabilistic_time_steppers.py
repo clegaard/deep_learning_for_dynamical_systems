@@ -116,7 +116,7 @@ if __name__ == "__main__":
         solver = args.solver
 
     _, x_train = odeint(f, x0_train, t_span_train, solver="rk4")
-    x_train = x_train + torch.rand_like(x_train) * args.noise_std
+    x_train = x_train + torch.randn_like(x_train) * args.noise_std
 
     _, x_validate = odeint(f, x0_validate, t_span_train, solver="rk4")
     _, x_example = odeint(f, x0_example, t_span_validate, solver="rk4")
