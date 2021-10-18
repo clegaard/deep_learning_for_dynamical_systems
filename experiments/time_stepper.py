@@ -46,7 +46,9 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument(
-        "--solver", choices=["direct", "resnet", "euler", "rk4"], default="euler"
+        "--solver",
+        choices=["direct", "resnet", "euler", "rk4", "dopri5", "tsit5"],
+        default="euler",
     )
     parser.add_argument("--hidden_dim", default=32, type=int)
     parser.add_argument("--n_layers", default=8, type=int)
