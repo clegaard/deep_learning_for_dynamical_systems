@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
@@ -72,9 +73,17 @@ def f(t, y):
     return dθ, dω
 
 
-def run():
-    device = "cuda"
-    n_epochs = 6000
+if __name__ == "__main__":
+
+    parser = ArgumentParser()
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--n_epochs", default=6000, type=int)
+    parser.add_argument("--t_start", default=0.0, type=float)
+    parser.add_argument("--t_end", type=float, default=np.pi * 4)
+    args = parser.parse_args()
+
+    device = args.device
+    n_epochs = args.n_epochs
 
     """
     generate data
@@ -83,8 +92,8 @@ def run():
     y0 = [np.pi / 4, 0]
     step_size = 0.01
 
-    t_start = 0.0
-    t_end = np.pi * 4
+    t_start = args.t_start
+    t_end = args.t_end
 
     t_eval = np.arange(t_start, t_end, step_size)
 
@@ -181,7 +190,3 @@ def run():
 
     plot_trajectories(t_eval, predicted, true, subsample_every)
     plt.show()
-
-
-if __name__ == "__main__":
-    run()
