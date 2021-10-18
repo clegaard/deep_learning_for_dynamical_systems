@@ -1,5 +1,7 @@
 from argparse import ArgumentParser
+from collections import defaultdict
 from itertools import chain
+from numpy.random.mtrand import choice
 
 import torch.nn as nn
 from torch.nn.modules.rnn import RNN
@@ -53,8 +55,8 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_dim", default=32, type=int)
     parser.add_argument("--n_layers", default=8, type=int)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--n_epochs", default=0, type=int)
-    parser.add_argument("--n_traj_train", default=100, type=int)
+    parser.add_argument("--n_epochs", default=100, type=int)
+    parser.add_argument("--n_traj_train", default=55, type=int)
     parser.add_argument("--n_traj_validate", default=10, type=int)
     parser.add_argument("--t_start_train", default=0.0, type=float)
     parser.add_argument("--t_end_train", default=1.0, type=float)
@@ -67,6 +69,9 @@ if __name__ == "__main__":
     parser.add_argument("--domain_validate", default=1.0, type=float)
     parser.add_argument("--latent_dim", default=4, type=int)
     parser.add_argument("--scatter", default=False, type=bool)
+    parser.add_argument(
+        "--criterion", default="elbo", choices=["elbo", "mse"], type=str
+    )
     args = parser.parse_args()
 
     # generate data
@@ -125,25 +130,25 @@ if __name__ == "__main__":
     device = args.device
 
     class Encoder(nn.Module):
-        def __init__(self, input_size, hidden_size) -> None:
+        def __init__(self, input_size, hidden_size, output_size) -> None:
             super().__init__()
             self.rnn = nn.RNN(input_size, hidden_size)
-            self.fc = nn.Linear(hidden_size, hidden_size * 2)
+            self.h2o = nn.Linear(hidden_size, output_size)
 
         def forward(self, x):
             x_flipped = torch.flip(x, (0,))
             _, h = self.rnn(x_flipped)
-            z0 = self.fc(h)
+            z0 = self.h2o(h)
             return z0
 
     class LatentODE(nn.Module):
         def __init__(self) -> None:
             super().__init__()
 
-            self.encoder = Encoder(2, 4)
+            self.encoder = Encoder(2, 25, latent_dim * 2)
 
             layers = []
-            layers.append(nn.Linear(4, args.hidden_dim))
+            layers.append(nn.Linear(latent_dim, args.hidden_dim))
             for _ in range(args.n_layers):
                 layers.append(nn.Linear(args.hidden_dim, args.hidden_dim))
                 layers.append(nn.Softplus())
@@ -152,17 +157,24 @@ if __name__ == "__main__":
             self.dynamics = nn.Sequential(*layers)
 
             self.decoder = (
-                nn.Sequential(nn.Linear(latent_dim, 20), nn.ReLU(), nn.Linear(20, 2))
+                nn.Sequential(
+                    nn.Linear(latent_dim, 20), nn.Softplus(), nn.Linear(20, 2)
+                )
                 .to(device)
                 .double()
             )
+            self.inference = False
 
         def forward(self, t, x):
             z = self.encoder(x)[-1]
             qz0_mean, qz0_logvar = z[:, :latent_dim], z[:, latent_dim:]
             qz0_std = torch.exp(0.5 * qz0_logvar)
             ε = torch.randn_like(qz0_mean)
-            z0 = qz0_mean + ε * qz0_std  # TODO
+
+            if self.inference:
+                z0 = qz0_mean
+            else:
+                z0 = qz0_mean + ε * qz0_std  # TODO
             # z0 = qz0_mean  # TODO
 
             _, z_pred = odeint(lambda t, z: self.dynamics(z), z0, t, solver=solver)
@@ -182,7 +194,7 @@ if __name__ == "__main__":
     opt = Adam(net.parameters())
 
     # train
-    losses = []
+    losses = defaultdict(list)
 
     def log_normal_pdf(x, mean, logvar):
         px = -0.5 * (
@@ -190,8 +202,9 @@ if __name__ == "__main__":
             + logvar
             + (x - mean) ** 2.0 / torch.exp(logvar)
         )
-        torch.tensor
         return px.sum((0, 2))
+
+        # return -.5 * (const + logvar + (x - mean) ** 2. / torch.exp(logvar))
 
     def normal_kl(μ1, log_var1, μ2, log_var2):
         v1 = torch.exp(log_var1)
@@ -204,24 +217,35 @@ if __name__ == "__main__":
 
     for _ in tqdm(range(args.n_epochs)):
 
-        # x_pred_train = decoder(z_pred_train)
         qz0_mean, qz0_logvar, x_pred_train = net(t_span_train, x_train)
 
-        log_px = log_normal_pdf(x_pred_train, x_train, noise_log_var)
+        log_px = log_normal_pdf(x_train, x_pred_train, noise_log_var)
         log_normal_kl = normal_kl(
             qz0_mean,
             qz0_logvar,
             torch.zeros_like(qz0_mean),
-            torch.zeros_like(qz0_logvar),
+            torch.zeros_like(qz0_logvar),  # we want logvar = 1 => var = 1
         )
 
-        loss = torch.mean(log_normal_kl - log_px, dim=0)
-        # loss = mse_loss(x_pred_train, x_train)
+        loss_elbo = torch.mean(log_normal_kl - log_px, dim=0)
+        loss_mse = mse_loss(x_pred_train, x_train)
+
+        if args.criterion == "mse":
+            loss = loss_mse
+        elif args.criterion == "elbo":
+            loss = loss_elbo
+
         loss.backward()
         opt.step()
         opt.zero_grad()
-        losses.append(loss.item())
+        losses["log_px"].append(
+            torch.mean(log_px).detach().numpy()
+        )  # how likely is it to observe the targets, if the output distributions produced by the network, is as they claim.
+        losses["kl"].append(torch.mean(log_normal_kl).detach().numpy())
+        losses["mse"].append(loss_mse.detach().numpy())
+        losses["elbo"].append(loss_elbo.detach().numpy())
 
+    net.inference = True
     _, _, x_pred_train = net(t_span_train, x_train)
     _, _, x_pred_validate = net(t_span_validate, x_validate)
 
@@ -233,90 +257,9 @@ if __name__ == "__main__":
     # x0_grid_before = get_meshgrid(step_per_axis=0.01, domain=domain)
     x_derivative = f(None, x0_grid)
 
-    # if args.solver == "direct":
-
-    #     out = dynamics(x0_grid)
-    #     # normalize for the step size used during training. If the network is trained with a step-size of 1/100 of a second
-    #     # it will predict changes that are 100 times as small as those for 1 second.
-    #     x_derivative_pred = (out - x0_grid) / step_size_train
-
-    # elif args.solver == "resnet":
-    #     x_derivative_pred = dynamics(x0_grid) / step_size_train
-    # else:
-    #     x_derivative_pred = dynamics(x0_grid)
-
     # plot
     x_pred_train = x_pred_train.detach().numpy()
     x_pred_validate = x_pred_validate.detach().numpy()
-    # x_pred_example = x_pred_example.detach().numpy()
-    # x_derivative_pred = x_derivative_pred.detach().numpy()
-    # x_derivative = x_derivative.detach().numpy()
-    # x0_grid = x0_grid.detach().numpy()
-
-    # # streamplot
-    # density = 1
-    # fig, ax = plt.subplots()
-    # fig.canvas.manager.set_window_title("stream plot")
-    # ode_patch = mpatches.Patch(color="black", label="true")
-    # nn_patch = mpatches.Patch(color="blue", label="pred")
-
-    # ax.streamplot(
-    #     x0_grid[..., 0],
-    #     x0_grid[..., 1],
-    #     x_derivative[..., 0],
-    #     x_derivative[..., 1],
-    #     color="black",
-    #     density=density,
-    # )
-
-    # ax.streamplot(
-    #     x0_grid[..., 0],
-    #     x0_grid[..., 1],
-    #     x_derivative_pred[..., 0],
-    #     x_derivative_pred[..., 1],
-    #     color="blue",
-    #     density=density,
-    # )
-
-    # ax.set_xlabel("θ")
-    # ax.set_ylabel("ω")
-    # ax.set_xlim(-domain_validate, domain_validate)
-    # ax.set_ylim(-domain_validate, domain_validate)
-
-    # ax.legend(handles=[ode_patch, nn_patch])
-
-    # # quiver
-    # fig, ax = plt.subplots()
-    # fig.canvas.manager.set_window_title("quiver")
-    # ax.quiver(
-    #     x0_grid[..., 0],
-    #     x0_grid[..., 1],
-    #     x_derivative[..., 0],
-    #     x_derivative[..., 1],
-    #     color="black",
-    #     angles="xy",
-    #     scale_units="xy",
-    #     label="true"
-    #     # scale=1,
-    # )
-
-    # ax.quiver(
-    #     x0_grid[..., 0],
-    #     x0_grid[..., 1],
-    #     x_derivative_pred[..., 0],
-    #     x_derivative_pred[..., 1],
-    #     color="blue",
-    #     angles="xy",
-    #     scale_units="xy",
-    #     # scale=1,
-    #     label="pred",
-    # )
-    # ax.legend()
-
-    # ax.set_xlabel("θ")
-    # ax.set_ylabel("ω")
-    # ax.set_ylim(-domain_validate, domain_validate)
-    # ax.set_xlim(-domain_validate, domain_validate)
 
     # phase space, training
     fig, ax = plt.subplots()
@@ -418,8 +361,10 @@ if __name__ == "__main__":
 
     # show
     fig, ax = plt.subplots()
-    ax.plot(losses)
     ax.set_xlabel("epoch")
-    ax.set_ylabel("MSE")
+    ax.set_ylabel("loss")
+    for name, values in losses.items():
+        ax.plot(values, label=name)
 
+    ax.legend()
     plt.show()
