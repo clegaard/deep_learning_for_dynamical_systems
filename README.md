@@ -1,5 +1,15 @@
-
 <img src="docs/survey_structure.svg">
+
+This is a companion repo for the review paper **Constructing Neural Network-Based Models for Simulating Dynamical Systems**.
+The goal is to provide PyTorch implementations that can be used as a starting point for implementation for other applications.
+
+If you use the work please cite it using:
+``` bibtex
+{
+    TODO add bibtex key
+}
+```
+
 
 
 # Installing dependencies
@@ -8,7 +18,14 @@
 python3 -m pip install -r requirements.txt
 ```
 
-# Checklist
+# Where are the models located?
+
+The table below contains the commands necessary to train and evaluate the models described in the review paper.
+Each experiment can be run using default parameters by executing the script in the python interpreter as follows:
+```
+python3 experiments/<name of experiment>.py ...
+```
+
 
 | Name                                         | Section | Command                                                         |
 | -------------------------------------------- | ------- | --------------------------------------------------------------- |
@@ -31,10 +48,21 @@ python3 -m pip install -r requirements.txt
 | Neural SDEs                                  | 4.5.4   | ...                                                             |
 
 
+# Docker Image
+In an effort to ensure that the code can be executed in the future, we provide a docker image.
+The Docker image allows the code to be run in a Linux based virtual machine on any platform supported by Docker.
 
-
-## Latent-Time Stepper
-
+To use the docker image, invoke the build command in the root of this repository:
+``` bash
+docker build . -t python_dynamical_systems
 ```
-py
+
+Following this "containers" containing the code and all dependencies can be instantiated via the "run" command:
+``` bash
+docker run -ti python_dynamical_systems bash
+```
+The command will establish an interactive connection to the container.
+Following this you can execute the code as if it was running on your host machine:
+``` bash
+python3 experiments/time_stepper.py ...
 ```
