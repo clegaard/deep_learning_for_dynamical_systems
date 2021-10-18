@@ -3,6 +3,7 @@ from collections import defaultdict
 from math import ceil, sin
 from math import floor
 
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,6 +14,7 @@ from torch.nn.modules.container import T
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
+import matplotlib as mpl
 
 
 if __name__ == "__main__":
@@ -42,6 +44,7 @@ if __name__ == "__main__":
     g = 1.0  # gravitational acceleration [m/s^2]
     l = 1.0  # length of pendulum [m]
 
+    model = args.model
     n_epochs = args.n_epochs
     device = args.device
     subsample_every = int(2.5 / step_size)
@@ -77,10 +80,6 @@ if __name__ == "__main__":
 
     θ, ω = res.y
 
-    # train
-
-    losses = defaultdict(lambda: defaultdict(list))
-
     def xavier_init(module):
         for m in module.modules():
             if type(m) == nn.Linear:
@@ -100,147 +99,139 @@ if __name__ == "__main__":
     hidden_dim = args.hidden_dim
     hidden_layers = args.n_layers
 
-    # train.vanilla
-    nn_vanilla = construct_network(1, 2, hidden_dim, hidden_layers)
+    t = torch.tensor(t_eval, device=device, requires_grad=True)
+    losses = defaultdict(lambda: defaultdict(list))
 
-    y_train = torch.tensor(res.y[:, ::subsample_every]).to(device)
-    t_train = torch.tensor(t_eval[::subsample_every], requires_grad=True).to(device)
-    # losses["vanilla"] = {"collocation": []}
-    opt_vanilla = torch.optim.Adam(nn_vanilla.parameters())
-
-    for epoch in tqdm(range(n_epochs), desc="vanilla: training epoch"):
-        out = nn_vanilla(t_train.unsqueeze(-1)).T
-
-        loss_collocation = F.mse_loss(out, y_train)
-
-        loss_collocation.backward()
-        opt_vanilla.step()
-        nn_vanilla.zero_grad()
-        losses["vanilla"]["collocation"].append(loss_collocation.item())
-
-    # train.autodiff
-    nn_autodiff = construct_network(1, 1, hidden_dim, hidden_layers)
-
-    # losses["autodiff"] = {"collocation": []}
     # `torch.autograd.grad` supports only lists of scalar values (e.g. single evaluation of network).
     # however the function accepts a list of these.
     def listify(A):
         return [a for a in A.flatten()]
 
-    opt_autodiff = torch.optim.Adam(nn_autodiff.parameters())
+    y_train = torch.tensor(res.y[:, ::subsample_every]).to(device)
+    t_train = torch.tensor(t_eval[::subsample_every], requires_grad=True).to(device)
+    θω_pred = None
 
-    for epoch in tqdm(range(n_epochs), desc="autodiff: training epoch"):
-        θ_pred = nn_autodiff(t_train.unsqueeze(-1)).T
+    if model == "vanilla":
+        nn_vanilla = construct_network(1, 2, hidden_dim, hidden_layers)
 
-        θ_listed = listify(θ_pred)
+        opt_vanilla = torch.optim.Adam(nn_vanilla.parameters())
 
-        # [0] since we differentiate with respect to an "single input",
-        # which is coincidentially a tensor.
-        # in this case  ω ≜ dθ
-        ω_pred = grad(
-            θ_listed, t_train, only_inputs=True, retain_graph=True, create_graph=True
-        )[0].unsqueeze(0)
+        for epoch in tqdm(range(n_epochs), desc="vanilla: training epoch"):
+            out = nn_vanilla(t_train.unsqueeze(-1)).T
 
-        θω = torch.cat((θ_pred, ω_pred), dim=0)
+            loss_collocation = F.mse_loss(out, y_train)
 
-        loss_collocation = F.mse_loss(θω, y_train)
-        # loss_collocation = F.mse_loss(θ_pred, y_train[:1])
-        # loss_collocation = F.mse_loss(ω_pred.squeeze(0), y_train[1])
+            loss_collocation.backward()
+            opt_vanilla.step()
+            nn_vanilla.zero_grad()
+            losses["vanilla"]["collocation"].append(loss_collocation.item())
 
-        loss_collocation.backward()
-
-        # sanity check
-        max_grad = next(nn_autodiff.modules())[0].weight.grad.max()
-        assert (
-            max_grad != 0.0
-        ), "maximal gradient of first layer was zero, something is up!"
-
-        opt_autodiff.step()
-        nn_autodiff.zero_grad()
-
-        losses["autodiff"]["collocation"].append(loss_collocation.item())
-
-    # train.autodiff+equations
-    nn_pinn = construct_network(1, 1, hidden_dim, hidden_layers)
-
-    opt_pinn = torch.optim.Adam(nn_pinn.parameters())
-    t_train_dense = torch.tensor(t_eval, requires_grad=True).to(device)
-    losses_pinn = {"collocation": [], "equation": []}
-    for epoch in tqdm(range(n_epochs), desc="pinn: training epoch"):
-        θ_pred = nn_pinn(t_train_dense.unsqueeze(-1)).T
-        θ_listed = listify(θ_pred)
-
-        ω_pred = grad(
-            θ_listed,
-            t_train_dense,
-            only_inputs=True,
-            retain_graph=True,
-            create_graph=True,
-        )[0].unsqueeze(0)
-        ω_listed = listify(ω_pred)
-        dω_pred = grad(
-            ω_listed,
-            t_train_dense,
-            only_inputs=True,
-            retain_graph=True,
-            create_graph=True,
-        )[0].unsqueeze(0)
-
-        θω_dense = torch.cat((θ_pred, ω_pred), dim=0)
-
-        # collocation loss is defined for sparse set of points
-        θω = θω_dense[:, ::subsample_every]
-        loss_collocation = F.mse_loss(θω, y_train)
-
-        # equation based loss is defined for dense samples
-        dω_eq = -torch.sin(θ_pred)
-        loss_equation = F.mse_loss(dω_pred, dω_eq)
-
-        loss_total = loss_collocation + loss_equation
-        loss_total.backward()
-        # next(net.modules())[0].weight.grad => this gives you gradients of the loss
-
-        # sanity check
-        max_grad = next(nn_pinn.modules())[0].weight.grad.max()
-        assert (
-            max_grad != 0.0
-        ), "maximal gradient of first layer was zero, something is up!"
-
-        opt_pinn.step()
-        nn_pinn.zero_grad()
-
-        losses["pinn"]["collocation"].append(loss_collocation.item())
-        losses["pinn"]["equation"].append(loss_equation.item())
-
-    # evaluate
-
-    t = torch.tensor(t_eval, device=device, requires_grad=True)
-
-    # vanilla
-    θω_vanilla = nn_vanilla(t.unsqueeze(-1)).detach().detach().cpu().T
+        θω_pred = nn_vanilla(t.unsqueeze(-1)).detach().detach().cpu().T
 
     # autodiff
-    θ_autodiff = nn_autodiff(t.unsqueeze(-1)).T
-    θ_autodiff_listed = listify(θ_autodiff)
-    ω_autodiff = grad(θ_autodiff_listed, t, only_inputs=True)[0].unsqueeze(0)
-    θω_autodiff = torch.cat((θ_autodiff, ω_autodiff), dim=0).detach().cpu()
+    elif model == "autodiff":
+        nn_autodiff = construct_network(1, 1, hidden_dim, hidden_layers)
+        opt_autodiff = torch.optim.Adam(nn_autodiff.parameters())
+
+        for epoch in tqdm(range(n_epochs), desc="autodiff: training epoch"):
+            θ_pred = nn_autodiff(t_train.unsqueeze(-1)).T
+
+            θ_listed = listify(θ_pred)
+
+            # [0] since we differentiate with respect to an "single input",
+            # which is coincidentially a tensor.
+            # in this case  ω ≜ dθ
+            ω_pred = grad(
+                θ_listed,
+                t_train,
+                only_inputs=True,
+                retain_graph=True,
+                create_graph=True,
+            )[0].unsqueeze(0)
+
+            θω = torch.cat((θ_pred, ω_pred), dim=0)
+
+            loss_collocation = F.mse_loss(θω, y_train)
+            loss_collocation.backward()
+
+            # sanity check
+            max_grad = next(nn_autodiff.modules())[0].weight.grad.max()
+            assert (
+                max_grad != 0.0
+            ), "maximal gradient of first layer was zero, something is up!"
+
+            opt_autodiff.step()
+            nn_autodiff.zero_grad()
+
+            losses["autodiff"]["collocation"].append(loss_collocation.item())
+
+        θ_autodiff = nn_autodiff(t.unsqueeze(-1)).T
+        θ_autodiff_listed = listify(θ_autodiff)
+        ω_autodiff = grad(θ_autodiff_listed, t, only_inputs=True)[0].unsqueeze(0)
+        θω_pred = torch.cat((θ_autodiff, ω_autodiff), dim=0).detach().cpu()
 
     # pinn
-    θ_pinn = nn_pinn(t.unsqueeze(-1)).T
-    θ_pinn_listed = listify(θ_pinn)
-    ω_pinn = grad(θ_pinn_listed, t, only_inputs=True)[0].unsqueeze(0)
-    θω_pinn = torch.cat((θ_pinn, ω_pinn), dim=0).detach().cpu()
+    elif model == "pinn":
+        nn_pinn = construct_network(1, 1, hidden_dim, hidden_layers)
 
-    # plot results
+        opt_pinn = torch.optim.Adam(nn_pinn.parameters())
+        t_train_dense = torch.tensor(t_eval, requires_grad=True).to(device)
+        losses_pinn = {"collocation": [], "equation": []}
+        for epoch in tqdm(range(n_epochs), desc="pinn: training epoch"):
+            θ_pred = nn_pinn(t_train_dense.unsqueeze(-1)).T
+            θ_listed = listify(θ_pred)
 
-    for title, θω_pred in zip(
-        ["vanilla", "autodiff", "pinn"],
-        [θω_vanilla, θω_autodiff, θω_pinn],
-    ):
+            ω_pred = grad(
+                θ_listed,
+                t_train_dense,
+                only_inputs=True,
+                retain_graph=True,
+                create_graph=True,
+            )[0].unsqueeze(0)
+            ω_listed = listify(ω_pred)
+            dω_pred = grad(
+                ω_listed,
+                t_train_dense,
+                only_inputs=True,
+                retain_graph=True,
+                create_graph=True,
+            )[0].unsqueeze(0)
 
+            θω_dense = torch.cat((θ_pred, ω_pred), dim=0)
+
+            # collocation loss is defined for sparse set of points
+            θω = θω_dense[:, ::subsample_every]
+            loss_collocation = F.mse_loss(θω, y_train)
+
+            # equation based loss is defined for dense samples
+            dω_eq = -torch.sin(θ_pred)
+            loss_equation = F.mse_loss(dω_pred, dω_eq)
+
+            loss_total = loss_collocation + loss_equation
+            loss_total.backward()
+            # next(net.modules())[0].weight.grad => this gives you gradients of the loss
+
+            # sanity check
+            max_grad = next(nn_pinn.modules())[0].weight.grad.max()
+            assert (
+                max_grad != 0.0
+            ), "maximal gradient of first layer was zero, something is up!"
+
+            opt_pinn.step()
+            nn_pinn.zero_grad()
+
+            losses["pinn"]["collocation"].append(loss_collocation.item())
+            losses["pinn"]["equation"].append(loss_equation.item())
+
+        θ_pinn = nn_pinn(t.unsqueeze(-1)).T
+        θ_pinn_listed = listify(θ_pinn)
+        ω_pinn = grad(θ_pinn_listed, t, only_inputs=True)[0].unsqueeze(0)
+        θω_pred = torch.cat((θ_pinn, ω_pinn), dim=0).detach().cpu()
+
+    def plot_predictions(model, θω_pred):
         ω_numerical = np.diff(θω_pred[:1]) / step_size
         fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
-        fig.canvas.set_window_title(title)
+        fig.canvas.manager.set_window_title(model)
         ax1.set_ylabel("θ(t)")
         ax2.set_ylabel("ω(t)")
         ax2.set_xlabel("t")
@@ -276,9 +267,9 @@ if __name__ == "__main__":
         plt.tight_layout()
 
     # plot loss functions as function of training steps
-    for network_name, losses in losses.items():
+    def plot_losses(model, losses):
         fig, ax = plt.subplots()
-        fig.canvas.set_window_title(f"loss terms '{network_name}'")
+        fig.canvas.manager.set_window_title(f"loss terms '{model}'")
 
         for loss_name, loss in losses.items():
             ax.plot(loss, label=loss_name)
@@ -286,12 +277,8 @@ if __name__ == "__main__":
         ax.legend()
         ax.set_xlabel("epoch")
 
-    # plt.figure()
-    # plot_colored(θ, ω, t_eval)
-    # plt.xlabel("angle")
-    # plt.ylabel("velocity")
-    # plt.title("polar plot")
-    import matplotlib as mpl
+    plot_predictions(model, θω_pred)
+    plot_losses(model, losses[model])
 
     fig = plt.figure()
     x, y = np.meshgrid(
@@ -302,13 +289,13 @@ if __name__ == "__main__":
     plt.streamplot(x, y, dθ, dω, density=2)
     plt.xlabel("θ")
     plt.ylabel("ω")
-    # plt.title("phase portrait")
+    fig.canvas.manager.set_window_title(f"phase portrait '{model}'")
 
     ax = plt.gca()
     plot_colored(ax, θ, ω, t_eval)
     cmap = plt.cm.jet
+
     norm = mpl.colors.Normalize(vmin=t_eval.min(), vmax=t_eval.max())
-    # cb1 = mpl.colorbar.ColorbarBase(ax, cmap=cmap, norm=norm)
     fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax)
 
     # draw initial state
