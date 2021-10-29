@@ -32,32 +32,6 @@ def plot_loss(losses):
     ax.set_xlabel("epoch")
 
 
-def plot_trajectories(time, predicted, true, subsample_every, colors=["b", "r", "g"]):
-    number_states = len(predicted)
-
-    fig, axes = plt.subplots(number_states, 1, sharex=True)
-    fig.canvas.manager.set_window_title(f"states")
-
-    if number_states == 1:
-        axes = [axes]
-
-    for (name, value_pred), ax, color in zip(predicted.items(), axes, colors):
-        ax.set_ylabel(name)
-        ax.plot(time, true[name], c="black", label="true")
-        ax.plot(time, value_pred, c=color, linestyle="--", label="predicted")
-
-        ax.scatter(
-            time[::subsample_every],
-            true[name][::subsample_every],
-            c="black",
-            linestyle="None",
-            label="collocation point",
-        )
-
-    plt.legend()
-    plt.tight_layout()
-
-
 def l_fun(t):
     return np.sin(t) + 2
 
@@ -173,7 +147,6 @@ if __name__ == "__main__":
 
         losses["collocation"].append(loss_collocation.item())
         losses["hidden"].append(loss_hidden.item())
-        # losses["length"].append(loss_length.item())
 
     plot_loss(losses)
 
@@ -188,5 +161,56 @@ if __name__ == "__main__":
         "l(t)": l.detach().cpu(),
     }
 
-    plot_trajectories(t_eval, predicted, true, subsample_every)
+    fig, (ax0, ax1, ax2) = plt.subplots(3, 1, sharex=True)
+    fig.canvas.manager.set_window_title(f"states")
+
+    ax0.set_ylabel("θ(t)")
+    ax0.plot(t_eval, θ, c="black", label="true")
+    ax0.plot(
+        t_eval,
+        θ_pred.detach().cpu().flatten(),
+        c="b",
+        linestyle="--",
+        label="predicted",
+    )
+    ax0.scatter(
+        t_eval[::subsample_every],
+        θ[::subsample_every],
+        c="black",
+        linestyle="None",
+        label="collocation point",
+    )
+
+    ax1.set_ylabel("ω(t)")
+    ax1.plot(t_eval, ω, c="black", label="true")
+    ax1.plot(
+        t_eval,
+        ω_pred.detach().cpu().flatten(),
+        c="r",
+        linestyle="--",
+        label="predicted",
+    )
+    ax1.scatter(
+        t_eval[::subsample_every],
+        ω[::subsample_every],
+        c="black",
+        linestyle="None",
+        label="collocation point",
+    )
+
+    ax2.set_ylabel("l(t)")
+    ax2.set_xlabel("t")
+    ax2.plot(t_eval, l, c="black", label="true")
+    ax2.plot(
+        t_eval,
+        l_pred.detach().cpu().flatten(),
+        c="g",
+        linestyle="--",
+        label="predicted",
+    )
+    # skip drawing misleading collocation points, since none are used for the pendulum length
+
+    ax1.legend()
+    plt.tight_layout()
+
     plt.show()
