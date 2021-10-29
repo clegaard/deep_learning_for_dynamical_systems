@@ -1,7 +1,10 @@
-<img src="docs/survey_structure.svg">
+# Constructing Neural Network-Based Models for Simulating Dynamical Systems
+**Note this repo is work in progress prior to reviewing**
 
 This is a companion repo for the review paper **Constructing Neural Network-Based Models for Simulating Dynamical Systems**.
 The goal is to provide PyTorch implementations that can be used as a starting point for implementation for other applications.
+
+<img src="docs/survey_structure.svg">
 
 If you use the work please cite it using:
 ``` bibtex
