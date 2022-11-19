@@ -6,8 +6,7 @@ The full paper can be accessed at: https://dl.acm.org/doi/10.1145/3567591
 The code in the repo is implemented in Python using PyTorch for defining and training the models.
 The scripts can be run using default parameters to reproduce the plots seen in the paper, as well as things like loss curves which were cut due to space requirements:
 
-<img src="docs/stream_plot.svg" width=49%>
-<img src="docs/time_vs_state_plot.svg" width=49%>
+<img src="docs/stream_plot.svg" width=49%><img src="docs/time_vs_state_plot.svg" width=49%>
 
 
 <img src="docs/survey_structure.svg">
