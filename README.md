@@ -77,18 +77,22 @@ python3 experiments/time_stepper.py ...
 If you use the work please consider citing it:
 ``` bibtex
 @article{10.1145/3567591,
-author = {Legaard, Christian M\o{}ldrup and Schranz, Thomas and Schweiger, Gerald and Drgo\v{n}a, J\'{a}n and Falay, Basak and Gomes, Cl\'{a}udio and Iosifidis, Alexandros and Abkar, Mahdi and Larsen, Peter Gorm},
-title = {Constructing Neural Network-Based Models for Simulating Dynamical Systems},
-year = {2022},
+author = {Legaard, Christian and Schranz, Thomas and Schweiger, Gerald and Drgo\v{n}a, J\'{a}n and Falay, Basak and Gomes, Cl\'{a}udio and Iosifidis, Alexandros and Abkar, Mahdi and Larsen, Peter},
+title = {Constructing Neural Network Based Models for Simulating Dynamical Systems},
+year = {2023},
+issue_date = {November 2023},
 publisher = {Association for Computing Machinery},
 address = {New York, NY, USA},
+volume = {55},
+number = {11},
 issn = {0360-0300},
 url = {https://doi.org/10.1145/3567591},
 doi = {10.1145/3567591},
-abstract = {Dynamical systems see widespread use in natural sciences like physics, biology, chemistry, as well as engineering disciplines such as circuit analysis, computational fluid dynamics, and control. For simple systems, the differential equations governing the dynamics can be derived by applying fundamental physical laws. However, for more complex systems, this approach becomes exceedingly difficult. Data-driven modeling is an alternative paradigm that seeks to learn an approximation of the dynamics of a system using observations of the true system. In recent years, there has been an increased interest in applying data-driven modeling techniques to solve a wide range of problems in physics and engineering. This paper provides a survey of the different ways to construct models of dynamical systems using neural networks. In addition to the basic overview, we review the related literature and outline the most significant challenges from numerical simulations that this modeling paradigm must overcome. Based on the reviewed literature and identified challenges, we provide a discussion on promising research areas.},
-note = {Just Accepted},
+abstract = {Dynamical systems see widespread use in natural sciences like physics, biology, and chemistry, as well as engineering disciplines such as circuit analysis, computational fluid dynamics, and control. For simple systems, the differential equations governing the dynamics can be derived by applying fundamental physical laws. However, for more complex systems, this approach becomes exceedingly difficult. Data-driven modeling is an alternative paradigm that seeks to learn an approximation of the dynamics of a system using observations of the true system. In recent years, there has been an increased interest in applying data-driven modeling techniques to solve a wide range of problems in physics and engineering. This article provides a survey of the different ways to construct models of dynamical systems using neural networks. In addition to the basic overview, we review the related literature and outline the most significant challenges from numerical simulations that this modeling paradigm must overcome. Based on the reviewed literature and identified challenges, we provide a discussion on promising research areas.},
 journal = {ACM Comput. Surv.},
-month = {nov},
-keywords = {Neural ODEs, Physics-Informed Neural Networks, Physics-based Regularization}
+month = {feb},
+articleno = {236},
+numpages = {34},
+keywords = {physics-informed neural networks, physics-based regularization, Neural ODEs}
 }
 ```
